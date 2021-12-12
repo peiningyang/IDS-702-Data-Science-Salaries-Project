@@ -1,1 +1,1 @@
-# IDS-702-Data-Science-Salaries-Project
+# IDS 702: Data Science Salaries Project

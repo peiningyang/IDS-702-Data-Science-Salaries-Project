@@ -1,0 +1,298 @@
+---
+title: 'IDS 702: Final Project Code'
+author: "Peining Yang"
+date: "11/16/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(readr)
+library(dplyr)
+library(tidyverse)
+library(kableExtra)
+library(mice)
+library(ggplot2)
+library(lme4)
+library(lattice)
+library(car)
+library(arm)
+library(boot)
+```
+
+# Read & Wrangle Data
+```{r}
+usa_salary <- read_delim("data/usa_salary.csv", delim = "\t", escape_double = FALSE, trim_ws = TRUE)
+```
+
+```{r}
+df <- usa_salary %>% dplyr::select(c("company", 
+                              "level", 
+                              "title", 
+                              "totalyearlycompensation", 
+                              "location", 
+                              "yearsofexperience",
+                              "yearsatcompany",
+                              "basesalary",
+                              "stockgrantvalue",
+                              "bonus",
+                              "gender",
+                              "Race",
+                              "Education",
+                              "state"))
+df$company <- factor(df$company)
+df$location <- factor(df$location)
+df$gender <- factor(df$gender)
+df$Race <- factor(df$Race)
+df$Education <- factor(df$Education)
+# df$state <- factor(df$state)
+```
+
+```{r}
+Northeast <- c("ME", "MA", "RI", "CT", "NH", "VT", "NY", "PA", "NJ", "DE", "MD", "DC")
+Southeast <- c("WV", "VA", "KY", "TN", "NC", "SC", "GA", "AL", "MS", "AR", "LA", "FL")
+Midwest <- c("OH", "IN", "MI", "IL", "MO", "WI", "MN", "IA", "KS", "NE", "SD", "ND")
+Southwest <- c("TX", "OK", "NM", "AZ")
+West <- c("CO", "WY", "MT", "ID", "WA", "OR", "UT", "NV", "CA", "AK", "HI")
+
+df$region <- ifelse(
+  df$state %in% Northeast, "Northeast", 
+  ifelse(df$state %in% Southeast, "Southeast",
+         ifelse(df$state %in% Midwest, "Midwest",
+                ifelse(df$state %in% Southwest, "Southwest",
+                       ifelse(df$state %in% West, "West", " "))))
+)
+
+```
+
+```{r}
+summary(is.na(df))
+```
+
+```{r}
+df2 <- df %>% filter(!(is.na(gender) & is.na(Race) & is.na(Education)))
+summary(is.na(df2))
+```
+
+```{r}
+missing_removed <- df2 %>% filter(is.na(Race) == F) %>% filter(is.na(Education) == F) %>% filter(is.na(gender) == F) %>% filter(is.na(level) == F)
+summary(is.na(missing_removed))
+
+company_count <- count(missing_removed, company, sort = T) 
+company_count <- company_count %>% filter(n >= 100)
+
+dta <- missing_removed %>% filter(company %in% company_count$company)
+dta$state <- factor(dta$state)
+```
+
+```{r}
+hist(dta$totalyearlycompensation, 
+     main = "Distribution of Total Yearly Compensation",
+     xlab = "Total Yearly Compensation (US$)",
+     col = "lightblue4")
+
+dta$log_compensation <- log(dta$totalyearlycompensation)
+hist(dta$log_compensation, 
+     main = "Distribution of log(Total Yearly Compensation)",
+     xlab = "log(Total Yearly Compensation) (US$)",
+     col = "lightblue4")
+```
+
+```{r}
+ggplot(dta, aes(x = Education, y = log_compensation, fill = Race)) +
+  geom_boxplot() +
+  scale_fill_brewer(palette="Purples")
+
+ggplot(dta, aes(x = Race, y = log_compensation, fill = gender)) +
+  geom_boxplot()
+
+ggplot(dta, aes(x = Education, y = log_compensation, fill = gender)) +
+  geom_boxplot() +
+  scale_fill_brewer(palette="Blues")
+
+```
+
+```{r interactions-yearsofexperience-vs-others}
+ggplot(dta,aes(x=log_compensation, y=yearsofexperience)) +
+  geom_point() + 
+  geom_smooth(method = "lm", col = "red3") +
+  facet_wrap(~ title)
+
+ggplot(dta,aes(x=log_compensation, y=yearsofexperience)) +
+  geom_point() + 
+  geom_smooth(method = "lm", col = "red3") +
+  facet_wrap(~ gender)
+
+ggplot(dta,aes(x=log_compensation, y=yearsofexperience)) +
+  geom_point() + 
+  geom_smooth(method = "lm", col = "red3") +
+  facet_wrap(~ Race)
+
+ggplot(dta,aes(x=log_compensation, y=yearsofexperience)) +
+  geom_point() + 
+  geom_smooth(method = "lm", col = "red3") +
+  facet_wrap(~ Education)
+```
+
+```{r}
+ggplot(dta,aes(x=log_compensation, y=yearsatcompany)) +
+  geom_point() + 
+  geom_smooth(method = "lm", col = "red3") +
+  facet_wrap(~ title)
+
+ggplot(dta,aes(x=log_compensation, y=yearsatcompany)) +
+  geom_point() + 
+  geom_smooth(method = "lm", col = "red3") +
+  facet_wrap(~ gender)
+
+ggplot(dta,aes(x=log_compensation, y=yearsatcompany)) +
+  geom_point() + 
+  geom_smooth(method = "lm", col = "red3") +
+  facet_wrap(~ Race)
+
+ggplot(dta,aes(x=log_compensation, y=yearsatcompany)) +
+  geom_point() + 
+  geom_smooth(method = "lm", col = "red3") +
+  facet_wrap(~ Education)
+```
+
+
+```{r}
+df2$log_compensation <- log(df2$totalyearlycompensation)
+
+test1 <- lm(log_compensation ~ company + title + yearsofexperience + yearsatcompany + gender + Race + Education, df2)
+summary(test1)
+```
+
+```{r}
+test2 <- lm(log_compensation ~ company + title + yearsofexperience + yearsatcompany + Race + gender + Education, dta)
+summary(test2)
+```
+
+```{r}
+test3 <- lm(log_compensation ~ company + title + yearsofexperience + yearsatcompany, df2)
+summary(test3)
+```
+
+```{r}
+test1_coef <- test1$coefficients
+test2_coef <- test2$coefficients
+```
+
+```{r}
+base_model <- lm(log_compensation ~ company + title + yearsofexperience + yearsatcompany + gender + Race + Education, dta)
+
+model_inter <- lm(log_compensation ~  company + yearsofexperience + title*yearsatcompany +gender*Education + Race*Education + gender*Race, dta)
+
+inter_stepwise <- step(base_model, scope = formula(model_inter), direction = "both", trace = 0)
+summary(inter_stepwise)
+```
+
+```{r}
+options(scipen = 100)
+vif(inter_stepwise)
+```
+
+```{r}
+interactions <- lm(log_compensation ~ company + title + yearsofexperience + 
+    yearsatcompany + gender + Race + Education + title:yearsatcompany + gender:Race + Race:Education, data = dta)
+```
+
+```{r}
+set.seed(1210)
+sample_state <- sample(unique(dta$state),8,replace=F)
+ggplot(dta[is.element(dta$state,sample_state),],
+       aes(x=Race, y=log_compensation, fill=Race)) +
+  geom_boxplot() +
+  scale_fill_brewer(palette="Greens") +
+  theme_classic() + theme(legend.position="none") +
+  facet_wrap( ~ state,ncol=4)
+
+ggplot(dta[is.element(dta$state,sample_state),],
+       aes(x=Education, y=log_compensation, fill=Education)) +
+  geom_boxplot() +
+  scale_fill_brewer(palette="Greens") +
+  theme_classic() + theme(legend.position="none") +
+  facet_wrap( ~ state,ncol=4)
+
+ggplot(dta[is.element(dta$state,sample_state),],
+       aes(x=gender, y=log_compensation, fill=gender)) +
+  geom_boxplot() +
+  scale_fill_brewer(palette="Greens") +
+  theme_classic() + theme(legend.position="none") +
+  facet_wrap( ~ state,ncol=4)
+
+ggplot(dta[is.element(dta$state,sample_state),],
+       aes(x=title, y=log_compensation, fill=title)) +
+  geom_boxplot() +
+  scale_fill_brewer(palette="Greens") +
+  theme_classic() + theme(legend.position="none") +
+  facet_wrap( ~ state,ncol=4)
+
+
+```
+
+```{r}
+set.seed(1210)
+sample_company<- sample(unique(dta$company),8,replace=F)
+ggplot(dta[is.element(dta$company,sample_company),],
+       aes(x=title, y=log_compensation, fill=title)) +
+  geom_boxplot() +
+  labs(title="Log price vs bulk purchase by state",
+       x="Bulk purchase",y="Log Price") +
+  theme_classic() + theme(legend.position="none") +
+  facet_wrap( ~ company,ncol=4)
+```
+
+```{r}
+RImodel1 <- lmer(log_compensation ~ company + title + yearsofexperience + yearsatcompany + gender + Race + Education + (1 | state), dta)
+
+# RImodel2 <- lmer(log_compensation ~ company + title + yearsofexperience + yearsatcompany + gender + Race + Education + (1 | region), dta)
+# 
+# RImodel3 <- lmer(log_compensation ~ company + title + yearsofexperience + yearsatcompany + gender + Race + Education + (1 | state) + (1 | region), dta)
+
+
+RImodel4 <- lmer(log_compensation ~ title + yearsofexperience + yearsatcompany + gender + Race + Education + (1 | state) + (1 | company), dta)
+
+RSmodel1 <- lmer(log_compensation ~ company + title + yearsofexperience + yearsatcompany + gender + Race + Education + (title | company), dta)
+ 
+RSmodel2 <- lmer(log_compensation ~ company + yearsofexperience + yearsatcompany + gender + Race + Education + (title | state), dta)
+
+
+#### RUN THIS TOMORROW !!!!! ###
+RSmodel3 <- lmer(log_compensation ~ title + (title | state) + (title | company), dta)
+```
+
+```{r}
+AIC(RImodel1)
+AIC(RImodel2)
+AIC(RImodel3)
+```
+
+
+```{r}
+anova(RImodel1, base_model)
+anova(RImodel2, base_model)
+anova(RImodel3, base_model)
+anova(RImodel1, RImodel3)
+anova(RImodel2, RImodel3)
+```
+
+```{r}
+# set.seed(1122)
+sample_state <- sample(unique(dta$state), 8, replace=F)
+
+ggplot(dta[is.element(dta$state,sample_state),], aes(x=title, y=log_compensation, fill=title)) +
+  geom_boxplot() +
+  facet_wrap( ~ state,ncol=4)
+```
+
+```{r}
+options(scipen = 100)
+model_sum <- as.data.frame(coefficients(summary(RImodel1)))
+model_sum$Estimate <- exp(model_sum$Estimate)
+```
+
+```{r}
+dotplot(ranef(RSmodel1,condVar=TRUE))$company
+```

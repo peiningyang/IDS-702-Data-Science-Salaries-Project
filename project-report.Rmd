@@ -1,0 +1,333 @@
+---
+title: "IDS 702 Final Project: Data Science & STEM Salaries in the US"
+author: "Peining Yang"
+date: "December 2021"
+output: pdf_document
+geometry: margin=1.5cm
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE, fig.pos = "H")
+library(readr)
+library(ggplot2)
+library(cowplot)
+library(tidyverse)
+library(kableExtra)
+library(car)
+library(lme4)
+library(lattice)
+```
+
+```{r data}
+usa_salary <- read_delim("data/usa_salary.csv", delim = "\t", escape_double = FALSE, trim_ws = TRUE)
+
+df <- usa_salary %>% dplyr::select(c("company", 
+                              "level", 
+                              "title", 
+                              "totalyearlycompensation", 
+                              "location", 
+                              "yearsofexperience",
+                              "yearsatcompany",
+                              "basesalary",
+                              "stockgrantvalue",
+                              "bonus",
+                              "gender",
+                              "Race",
+                              "Education",
+                              "state"))
+df$company <- factor(df$company)
+df$location <- factor(df$location)
+df$gender <- factor(df$gender)
+df$Race <- factor(df$Race)
+df$Education <- factor(df$Education)
+df$title <- factor(df$title)
+
+Northeast <- c("ME", "MA", "RI", "CT", "NH", "VT", "NY", "PA", "NJ", "DE", "MD", "DC")
+Southeast <- c("WV", "VA", "KY", "TN", "NC", "SC", "GA", "AL", "MS", "AR", "LA", "FL")
+Midwest <- c("OH", "IN", "MI", "IL", "MO", "WI", "MN", "IA", "KS", "NE", "SD", "ND")
+Southwest <- c("TX", "OK", "NM", "AZ")
+West <- c("CO", "WY", "MT", "ID", "WA", "OR", "UT", "NV", "CA", "AK", "HI")
+
+df$region <- ifelse(
+  df$state %in% Northeast, "Northeast", 
+  ifelse(df$state %in% Southeast, "Southeast",
+         ifelse(df$state %in% Midwest, "Midwest",
+                ifelse(df$state %in% Southwest, "Southwest",
+                       ifelse(df$state %in% West, "West", " "))))
+)
+
+df2 <- df %>% filter(!(is.na(gender) & is.na(Race) & is.na(Education)))
+
+missing_removed <- df2 %>% filter(is.na(Race) == F) %>% filter(is.na(Education) == F) %>% filter(is.na(gender) == F) %>% filter(is.na(level) == F)
+# summary(is.na(missing_removed))
+
+company_count <- count(missing_removed, company, sort = T) 
+company_count <- company_count %>% filter(n >= 100)
+
+dta <- missing_removed %>% filter(company %in% company_count$company)
+dta$state <- factor(dta$state)
+dta$region <- factor(dta$region)
+dta$log_compensation <- log(dta$totalyearlycompensation)
+```
+
+# Summary
+
+In this project we aim to investigate the factors influencing salaries in Data Science and STEM related jobs, taking into account of the heterogeneity of compensation across locations and companies. After fitting a hierarchical linear regression model, results show that position title, years of experience, years at current company, gender, race, and education are all associated significantly with salary, with random variations based on the state and company of employment. 
+
+# Introduction
+
+_levels.fyi_ is a website that provides data on specific career levels and its compensations across different companies. Information on the website are submitted by individual users through uploading their offer letters, W2 Statements, Annual Compensation Statments, etc., which provides insights on an important topic that is often undiscussed. In this project, we will analyze data of Data Science and STEM salaries across companies in the United States. We will fit a hierarchical linear regression model in order to investigate the factors influencing the total annual compensation of a position, accounting for potential clustering by location and by companies. 
+
+# Data
+
+The data used for this project was scraped from the _levels.fyi_ website, cleaned and uploaded to Kaggle. The original dataset contained 62,642 observations and 29 variables. 
+
+## Data Wrangling
+
+As we aim to focus solely on salaries in the United State, we first filtered out any observations that are located outside of the US, which left us with 52,838 observations. We then created a new variable of _region_ which includes 5 US regions in order to perform analysis on the region level. There were also a notable amount of missing values in the dataset, concentrated between the _gender_, _race_ and _education_ variables. We first removed 9,464 observations that were missing all three demographics information, which leaves 27,010 observations. At this point, there are still 1,548 observations missing in _gender_, 14,960 missing in _race_ and 9,869 missing in _education_. This is a significant amount of observations and we are hesitant to remove them entirely as they are likely missing not at random (MNAR). We will keep the missing data for now and perform analysis both including and excluding the problematic variables and with datasets containing missing values and with them removed. Intuitively, we expect there to be a variation of salary across different companies. Therefore, we also filtered out any companies that had less than 100 observations in order to guarantee sufficient data for analysis. After selecting only the variables of interest for our analysis, the final dataset contains 27,010 observations and 15 variables. If we remove all missing values, the dataset contains 9,551 observations, which we believe is still sufficient for analysis. A full data description can be found in Section 1.1 of the appendix. 
+
+## Exploratory Data Analysis
+
+We first explored our outcome of interest, which is the _totalyearlycompensation_ variable. After plotting a histogram, we observed a severe right skew of the distribution. This prompted a log transformation on the response variable. Results showed a significant improvement of a much more normal distribution. We will proceed with _log(compensation)_ for our analysis. The figures below show the comparison before and after the transformation. 
+
+```{r outcome-variable-transformation, fig.width=7, fig.height=3, fig.align="center"}
+comp <- ggplot(dta, aes(totalyearlycompensation)) +
+  geom_histogram(aes(y = ..density..), color = "black", linetype = "dashed",
+                 fill = rainbow(15), bins = 15) +
+  theme(legend.position = "none") +
+  geom_density(alpha = .25, fill = "lightblue") + 
+  scale_fill_brewer(palette = "Blues") +
+  theme_bw() +
+  theme(legend.position = "none", 
+        axis.text = element_text(size = 7), 
+        axis.title = element_text(size = 9, face = "bold"), 
+        plot.title = element_text(size = 7, face = "bold")) +
+  labs(title = "Figure 1: Distribution of Total Yearly Compensation",
+       x = "Total Yearly Compensation",
+       y = "Density")
+
+log_comp <- ggplot(dta, aes(log_compensation)) +
+  geom_histogram(aes(y = ..density..), color = "black", linetype = "dashed",
+                 fill = rainbow(15), bins = 15) +
+  theme(legend.position = "none") +
+  geom_density(alpha = .25, fill = "lightblue") + 
+  scale_fill_brewer(palette = "Blues") +
+  theme_bw() +
+  theme(legend.position = "none", 
+        axis.text = element_text(size = 7), 
+        axis.title = element_text(size = 9, face = "bold"), 
+        plot.title = element_text(size = 7, face = "bold")) +
+  labs(title = "Figure 2: Distribution of log(Total Yearly Compensation)",
+       x = "log(Total Yearly Compensation)",
+       y = "Density")
+
+plot_grid(comp, log_comp, nrow = 1, rel_widths = c(0.5, 0.5))
+```
+One of our research criteria is to account for variation of yearly compensations by location and/or by companies. The figure below shows the log(compensation) of a random subset of states. Results indeed showed a variation of salaries across states. Similar boxplots of log(compensation) across regions and across companies also showed variations, although less drastic for regions (See section 1.2 of the Appendix). We will include random effects by state, region, company, or more than one in our model fitting process. 
+
+```{r var-by-state, fig.width=5, fig.height=3, fig.align="center"}
+set.seed(1208)
+sample_state <- sample(unique(dta$state), 10, replace = F)
+
+ggplot(dta[is.element(dta$state, sample_state),], aes(x = state, y = log_compensation, fill = state)) +
+  geom_boxplot() +
+  labs(title="Figure 3: log(Total Yearly Compensation) by State",
+       x="State",y="log(Total Yearly Compensation)") + 
+  theme_bw() +
+  scale_fill_brewer(palette="BuPu") + 
+  theme(legend.position = "none",
+        axis.text = element_text(face = "bold", size = 6, angle = 45),
+        axis.title = element_text(size = 8, face = "bold"),
+        plot.title = element_text(size = 10, face = "bold"))
+```
+
+Lastly, we explored potential interaction terms that should be included in the model. As seen from the figure below, the mean log(compensation) of employees with different degrees of education is influenced by their race. Similar variations were discovered between _race_ and _gender_ and _education_ and _gender_. In addition, when plotting log(compensation) against years at the company, we observed a change in slopes across different position titles (See section 1.3 in Appendix). We will proceed with these interaction terms fpr the model fitting process. 
+
+```{r interaction-education-race, fig.width=7, fig.height=3, fig.align="center"}
+ggplot(dta, aes(x = Education, y = log_compensation, fill = Race)) +
+  geom_boxplot(outlier.shape = NA) +
+  ylim(10.5, 14) +
+  scale_fill_brewer(palette = "Blues") + 
+  labs(title = "Figure 4: Interaction between Education level and Race",
+       x = "Education",
+       y = "log(Compensation)",
+       fill = "Race") + 
+  theme_bw() + 
+  theme(legend.position = "right") +  
+  theme(axis.text = element_text(face = "bold", size = 6),
+        axis.title = element_text(size = 12, face = "bold"),
+        plot.title = element_text(size = 10, face = "bold"))
+```
+
+# Model
+
+The initial step to model fitting was to determine whether removing the observations with missing values would cause a significant change in our model. We first fitted a linear regression model with _log(compensation)_ as the response variable and _company_, _title_, _yearsofexperience_, and _yearsatcompany_ as the predictor variables on the dataset with missing demographics information. This model generated an adjusted R-squared value of 0.619 and an AIC score of 7419.47. We then fitted two more models based on the previous model with the additional _gender_, _race_ and _education_ as predictor variables on both a dataset with missing values and a dataset with missing values removed. Using the full dataset, the model generated an adjusted R-squared value of 0.646 and an AIC score of 2976.63. Using the dataset with missing values removed, the model generated an adjusted R-squared value of 0.617 and an AIC score of 2485.68. In addition, the latter two models only had a 6.67% difference in model coefficients. Given the low AIC score, we decided to continue our analysis using the dataset with all missing values removed.  
+
+From the exploratory data analysis, we tested the interaction terms of _title:yearsatcompany_, _gender:education_, _race:education_ and _gender:race_. A stepwise AIC model selection algorithm chose to keep all four interaction terms in the model. However, the interaction terms showed extremely high Variance Inflation Factors (VIF), indicating that there is significant issues with multicollinearity (See section 2.1 of Appendix for VIF values). Removal of any interaction terms did not help with lowering VIF. Therefore, we have chosen to remove interaction terms from the model. 
+
+## Hierarchical Linear Regression Model
+
+Since we observed varying means of log(compensation) across states, US regions and companies in the EDA, we first wanted to determine whether it's statistically significant to include varying intercepts for _state_, _region_, or _company_ in the model. Building on top of our base linear regression model, we first fitted a model with only _state_ as the random effect and another model with both _state_ and _region_ as the random effects. Both models had similar AIC values of 2313.53 and 2313.99, respectively. An ANOVA test between the two showed a p-value of 0.317, which is above the 0.05 threshold. We can conclude that the inclusion of _region_ as a random effect is not statistically significant. We then fitted a third model with _state_ and _company_ as varying intercepts. An ANOVA test produced a p-value of less than 0.001, indicating that the random effect of company is statistically significant. In additon, this model has an AIC value of 2266.94, which is smaller than the previous two models. We will proceed with _state_ and _company_ as random effects in the model. 
+
+Next we wanted to determine whether we should include any varying slopes. From the EDA, we discovered that there is some variation of log(compensation) for different titles across states. After fitting a model with varying slopes of _title_ and _state_, an ANOVA test with the previous model showed a p-value of 0.748, which is above the 0.05 threshold and statistically insignificant. This model also showed an AIC value of 2645.59, which is higher than the model with varying intercepts (AIC of 2313.53). Therefore, we will exclude varying slopes from the model. The final model contains _title_, _yearsofexperience_, _yearsatcompany_, _gender_, _race_, and _education_ as predictor variables with random effects of _state_ and _company_. The mathematical notation of this model is shown below. A full model output can be found in section 2.2 of the Appendix. 
+\newline
+\newline
+$$
+\begin{aligned}
+log(Compensation_{ijk}) = (\beta_0 + \gamma_{0k} + \gamma_{0jk}) + \sum_{a=2}^{15} \beta_{1a} [title_i = a] + \beta_2 yearsofexperience_i + \beta_3 yearsatcompany_i + \\ \sum_{b=2}^3 \beta_{4b} [gender_i = b] + \sum_{c=2}^5 \beta_{5c} [race_i = c] + \sum_{d=2}^5 \beta_{5d} [education_i = d] + \epsilon_ijk; i = 1,...,n_j; j = 1,...,J
+\end{aligned}
+$$
+\newline
+$$\epsilon_{ijk} \sim \mathcal{N}(0,\sigma^2)$$
+$$(\gamma_{0k}, \gamma_{0jk}) \sim \mathcal{N_2}(\mathbf{0},\Sigma)$$
+where $a$ takes on different levels of the title variable, $b$ takes on different levels of the gender variable, $c$ takes on different levels of the race variable and $d$ takes on different levels of the education variable.
+
+## Model Assumptions
+
+With our final model, we performed various diagnostic tests to assess model assumptions. From the residuals vs. fitted values plots below, we can see that the constant variance and independence assumptions are not violated as points are scattered relatively randomly along the horizontal line at 0. The QQ plot of residuals of the final model showed that the points on both ends are slightly trailing away from the 45 degree line. This indicates that there is a violation of the normality assumption with the model. We have already performed a log transformation on the response variable, which now shows a normal distribution. We are hesitant to classify any points as outliers due to the nature of salaries. Therefore, we will keep our model with only a log transformation. The VIF values of the final model are all below 3, indicating that we do not have issues of multicollinearity. 
+
+```{r model-assumptions, fig.width=5, fig.height=3.5, fig.show="hold", out.width="47%",fig.align="center"}
+dta <- dta %>% mutate(title = relevel(title, "Data Scientist"))
+RImodel4 <- lmer(log_compensation ~ title + yearsofexperience + yearsatcompany + gender + Race + Education + (1 | state) + (1 | company), dta)
+
+ggplot(dta, aes(x = fitted(RImodel4), y = residuals(RImodel4))) + 
+  geom_point(col = "lightblue4", alpha = .5) +
+  theme_bw() +
+  labs(title = "Residuals vs. Fitted Values",
+       x = "Fitted Values",
+       y = "Residuals") +
+  geom_hline(yintercept = 0, col = "red")
+
+ggplot(dta, aes(sample = residuals(RImodel4))) +
+  stat_qq(col = "lightblue4", alpha = .5) + 
+  stat_qq_line(col= "red") +
+  theme_bw() +
+  labs(title = "Normal Q-Q Plot",
+       x = "Theoretical Quantiles",
+       y= "Sample Quantiles")
+```
+
+## Model Interpretation
+
+The baseline of the model is someone who is an Asian female Data Scientist with a Bachelor's degree and 0 years of experience and 0 years at the current company. We expect this employee's total yearly compensation to be $e^{11.675} = \$117,594.8$. Keeping all else constant, with every unit increase in experience, we expect her compensation to increase by a multiplicative effect of $e^{0.0334} =1.034$, which is about a 3.4% increase. With every unit increase in years at the company, we expect a multiplicative effect of $e^{0.0066} = 1.0066$, which is about a 0.6% increase. If her position is a Software Engineer and keeping all else constant, we expect her total yearly compensation to increase by a multiplicative effect of $e^{0.0498} = 1.051$, which is about a 5.1% increase. Keeping all else constant, we expect roughly a 6.7% increase if this person was male, a 4.3% decrease if this person was Black and a 26.6% increase if this person has a PhD. 
+
+The estimated standard error for state is 0.149, which describes the across state variation attributed to the random intercept. For companies, the estimated standard error is 0.232. This implies that the total yearly compensation of an employee in the tech industries varies more by company than by state. The estimated standard error of the residual of the model is 0.266, which describes the within-state/company or the remaining unexplained variation. As seen from the figure below, our model is statistically significant for all besides 7 companies. A similar plot in the section 3.1 of the Appendix shows the states where our model is statistically significant. 
+
+```{r across-region, fig.align="center"}
+dotplot(ranef(RImodel4,condVar=TRUE))$company
+```
+
+# Limitations
+
+One of the biggest limitations to this project is the amount of missing values in the original dataset. On average, there were about 50% of data missing for the demographics variables. Since these values are likely missing not at random, we are hesitant to perform imputations. Although removing these observations did not pose a significant effect on the model, it would be more ideal to include them as removing them entirely could've taken out crucial information from the other predictor variables. In addition, we did not include any interaction terms in the final model due to issues of multicollinearity. 
+
+# Conclusion
+
+According to the final model, an employee expected to earn the most salary is a White male with a PhD working as a Software Engineering Manager. With every year increase in experience and employment at current company their salary is also expected to increase. This project generated practical insights that could potentially benefit job seekers in the Data Science and STEM field. In the future, it would be interesting to include international data or price of living in each location of employment for a more holistic analysis. 
+
+# Appendix
+
+## 1.1
+```{r 1.1}
+Variable <- c("company", "level", "title", "totalyearlycompensation", "location", "yearsofexperience", "yearsatcompany", "basesalary", "stockgrantvalue", "bonus", "gender", "race", "education", "state", "region")
+Description <- c("Company of employment (character)",
+                 "Position level within company.",
+                 "Position title within company,",
+                 "Total yearly compensation in US$ (outcome)",
+                 "City and state of employment.",
+                 "Total years of working experience.",
+                 "Total years at current company.", 
+                 "Baseline salary in US$.",
+                 "Stock grant value in US$.",
+                 "Bonus in US$",
+                 "Gender: Male, Female, or Other",
+                 "Race: White, Black, Asian, Hispanic, or Two or More",
+                 "Education level: Highschool, Some College, Bachelor's Degree, Master's Degree, or PhD",
+                 "State of employment.",
+                 "US region of employment.")
+data_description <- data.frame(Variable, Description)
+
+kable(data_description,
+      caption = "Data Description") %>% 
+  kable_styling(position = "center", latex_options = "HOLD_position", font_size = 10)
+```
+
+## 1.2
+
+```{r var-by-company, fig.width=5, fig.height=3, fig.align="center"}
+set.seed(1208)
+sample_company <- sample(unique(dta$company), 10, replace = F)
+
+ggplot(dta[is.element(dta$company, sample_company),], aes(x = company, y = log_compensation, fill = company)) +
+  geom_boxplot() +
+  labs(title="Figure 4: log(Total Yearly Compensation) by Company",
+       x="Company",y="log(Total Yearly Compensation)") + 
+  theme_bw() +
+  theme(legend.position = "none",
+        axis.text = element_text(face = "bold", size = 6, angle = 45),
+        axis.title = element_text(size = 8, face = "bold"),
+        plot.title = element_text(size = 10, face = "bold"))
+```
+
+```{r var-by-region, fig.width=5, fig.height=3, fig.align="center"}
+ggplot(dta, aes(x = region, y = log_compensation, fill = region)) + 
+  geom_boxplot() +
+  labs(title="Figure 4: log(Total Yearly Compensation) by Region",
+       x="Region",y="log(Total Yearly Compensation)") + 
+  theme_bw() +
+  theme(legend.position = "none",
+        axis.text = element_text(face = "bold", size = 6, angle = 45),
+        axis.title = element_text(size = 8, face = "bold"),
+        plot.title = element_text(size = 10, face = "bold"))
+```
+
+## 1.3
+```{r}
+ggplot(dta,aes(x=log_compensation, y=yearsatcompany)) +
+  geom_point(col= "lightblue4", alpha = .5) + 
+  geom_smooth(method = "lm", col = "red3") +
+  labs(title = "Figure 2.2: log(Compensation) vs. Years at Company by Position Titles",
+       x = "log(Compensation)",
+       y = "Years at Company") + 
+  facet_wrap(~ title)
+```
+
+## 2.1
+```{r}
+high_vif <- lm(formula = log_compensation ~ company + title + yearsofexperience + 
+    yearsatcompany + gender + Race + Education + title:yearsatcompany + 
+    gender:Education + gender:Race + Race:Education, data = dta)
+kable(round(vif(high_vif), 3),
+      caption = "VIF of Model with Interactions") %>% 
+  kable_styling(position = "center", latex_options = "HOLD_position", font = 10)
+```
+
+## 2.2
+```{r}
+fixed <- as.data.frame(coef(summary(RImodel4)))
+ci <- as.data.frame(confint(RImodel4))
+ci <- ci[4:30,]
+output <- round(cbind(fixed, ci), digits = 3)
+```
+
+```{r final-model-output, fig.align="center"}
+kable(output,
+      caption = "Hierarchical Linear Regression Model Output") %>%
+  kable_styling(position = "center", latex_options = "HOLD_position", font_size = 10) %>%
+  add_header_above(c("Fixed Effects", "", "", "", "", ""))
+
+random <- data.frame(Groups = c("state", "company", "Residual"),
+                     Variance = c(0.022, 0.054, 0.071),
+                     Std.Dev = c(0.149, 0.232, 0.266))
+kable(random) %>%
+  kable_styling(position = "center", latex_options = "HOLD_position", font_size = 10) %>%
+  add_header_above(c("Random Effects", "", ""))
+```
+
+## 3.1
+```{r}
+dotplot(ranef(RImodel4,condVar=TRUE))$state
+```
+
+
+
